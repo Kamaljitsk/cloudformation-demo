@@ -3,16 +3,7 @@ Description: VPC CFT
 Parameters:
   environment:
     Type: String
-<<<<<<< HEAD
     Default: demo
-=======
-    AllowedValues:
-      - demo
-      - dev
-      - qa
-      - stage
-      - prod
->>>>>>> main
   product:
     Type: String
     Default: test
