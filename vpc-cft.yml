@@ -4,6 +4,7 @@ Parameters:
   environment:
     Type: String
     AllowedValues:
+      - demo
       - dev
       - qa
       - stage
