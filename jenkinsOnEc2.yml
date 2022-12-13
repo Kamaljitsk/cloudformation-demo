@@ -1,0 +1,285 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: EC2 Jenkins Server Preconfigured with Plugins and a Completed Setup
+Mappings:
+  RegionMap:
+    us-east-1:
+      HVM64: ami-0149b2da6ceec4bb0
+      ARM64: ami-00266f51b6b22db58
+    us-west-2:
+      HVM64: ami-0c09c7eb16d3e8e70
+      ARM64: ami-02ba3245f79d1c136
+    ap-south-1:
+      HVM64: ami-024c319d5d14b463e
+      ARM64: ami-0abb0f6c7cff47436
+Parameters:
+  environment:
+    Type: String
+    Default: shared
+  product:
+    Type: String
+    Default: test
+  service:
+    Type: String
+    Default: jenkins
+  keyName:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Default: docker-key
+  instanceType:
+    Description: InstanceType
+    Type: String
+    Default: t2.micro
+  ec2RootVolumeSize:
+    Description: EC2 Root Volume Size
+    Type: Number
+    Default: 8
+  ec2ExtraVolumeSize:
+    Description: EC2 Additional Volume Size
+    Type: Number
+    Default: 4
+Resources:
+  iamRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${environment}-${product}-${service}-iam-role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: !Sub '${environment}-${product}-${service}-iam-role-policy'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - 'secretsmanager:GetRandomPassword'
+                  - 'secretsmanager:GetSecretValue'
+                  - 'secretsmanager:DescribeSecret'
+                  - 'secretsmanager:ListSecrets'
+                  - 'ssm:GetParametersByPath'
+                  - 'ssm:DescribeParameters'
+                  - 'ssm:GetParameters'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:PutImage'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:UploadLayerPart'
+                  - 'ecr:CompleteLayerUpload'
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ec2:*'
+                  - 'ecs:*'
+                  - 'route53:*'
+                  - 'cloudfront:*'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'sts:AssumeRole'
+                Resource:
+                  - >-
+                    arn:aws:iam::313686187887:role/shared-test-jenkins-assumable-role
+                Effect: Allow
+  instanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref iamRole
+  ec2Instance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      KeyName: !Ref keyName
+      InstanceType: !Ref instanceType
+      ImageId: !FindInMap 
+        - RegionMap
+        - !Ref 'AWS::Region'
+        - HVM64
+      IamInstanceProfile: !Ref instanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: 'true'
+          DeviceIndex: '0'
+          GroupSet:
+            - sg-083534e1d754d37c8 
+              
+          SubnetId: subnet-0f9cf22f4a26651ea 
+            
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            DeleteOnTermination: 'true'
+            VolumeSize: !Ref ec2RootVolumeSize
+        - DeviceName: /dev/sdf
+          Ebs:
+            DeleteOnTermination: 'true'
+            VolumeSize: !Ref ec2ExtraVolumeSize
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+
+          set -e
+
+          echo "\n\nDisabling Firewall\n\n"
+
+          ufw disable
+
+          echo "\n\nMounting Additional Volume to the Jenkins home directory\n\n"
+
+          mkfs -t xfs /dev/xvdf
+          mkdir /var/lib/jenkins
+          uuid=$(blkid | grep xfs | cut -b 12-54)
+          echo "$uuid /var/lib/jenkins  xfs  defaults,nofail  0  2" >> /etc/fstab
+          mount -a
+
+          echo "\n\nInstalling Docker\n\n"
+
+          apt update -y
+          apt install apt-transport-https ca-certificates curl software-properties-common -y
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+          add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
+          apt-cache policy docker-ce
+          apt install docker-ce -y
+
+          usermod -aG docker ubuntu
+
+          echo "\n\nInstalling Docker Compose\n\n"
+
+          curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+
+          echo "\n\nInstalling Java and Jenkins\n\n"
+
+          apt update
+          apt install openjdk-11-jdk -y
+
+          wget -p -O - https://pkg.jenkins.io/debian/jenkins.io.key | apt-key add -
+          sh -c 'echo deb http://pkg.jenkins-ci.org/debian binary/ > /etc/apt/sources.list.d/jenkins.list'
+          apt update
+          apt install jenkins -y
+
+          echo "\n\nAwait Initial Password Being Available\n\n"
+
+          until $(curl -s -m 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done
+
+          echo "\n\nSet Master Label\n\n"
+
+          sed -i -e "s@<label>.*</label>@<label>master</label>@" /var/lib/jenkins/config.xml
+
+          echo "\n\nRestarting Jenkins\n\n"
+
+          service jenkins restart
+
+          echo "\n\nAwait Initial Password Being Available\n\n"
+
+          until $(curl -s -m 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done
+
+          echo "\n\nInstall Plugins on Jenkins\n\n"
+
+          cat <<< '
+            pipeline-graph-analysis
+            aws-java-sdk
+            jquery-detached
+            github
+            workflow-scm-step
+            matrix-project
+            pipeline-input-step
+            workflow-api
+            ace-editor
+            pipeline-build-step
+            git
+            jackson2-api
+            pipeline-model-extensions
+            momentjs
+            pipeline-stage-step
+            docker-workflow
+            mapdb-api
+            display-url-api
+            structs
+            ant
+            plain-credentials
+            workflow-multibranch
+            workflow-aggregator
+            workflow-cps-global-lib
+            pipeline-stage-view
+            pipeline-milestone-step
+            jdk-tool
+            ssh-slaves
+            bouncycastle-api
+            subversion
+            handlebars
+            docker-commons
+            matrix-auth
+            aws-credentials
+            mailer
+            pipeline-stage-tags-metadata
+            timestamper
+            mercurial
+            ssh-credentials
+            handy-uri-templates-2-api
+            jsch
+            workflow-job
+            credentials
+            pipeline-model-declarative-agent
+            ldap
+            command-launcher
+            durable-task
+            pipeline-model-definition
+            git-client
+            pipeline-rest-api
+            lockable-resources
+            cloudbees-folder
+            bitbucket
+            junit
+            github-branch-source
+            gradle
+            workflow-step-api
+            workflow-durable-task-step
+            scm-api
+            ws-cleanup
+            branch-api
+            pipeline-aws
+            github-api
+            resource-disposer
+            workflow-cps
+            apache-httpcomponents-client-4-api
+            pam-auth
+            token-macro
+            authentication-tokens
+            git-server
+            pipeline-github-lib
+            folder-properties
+            pipeline-model-api
+            credentials-binding
+            pipeline-utility-steps
+            email-ext
+            workflow-basic-steps
+            script-security
+            cloudbees-bitbucket-branch-source
+            variant
+            build-timeout
+            antisamy-markup-formatter
+            workflow-support
+          ' > /root/plugins.txt
+
+          curl -o /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar http://localhost:8080/jnlpJars/jenkins-cli.jar
+
+          java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" install-plugin $(cat /root/plugins.txt | tr "\n" " ")
+
+          echo "\n\nCreating Users & Setting Temporary Password to ==> changemenow \n\n"
+
+          echo 'jenkins.model.Jenkins.instance.securityRealm.createAccount("devops","changemenow")' | java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" groovy =
+
+          echo 'jenkins.model.Jenkins.instance.securityRealm.createAccount("admin", "changemenow")' | java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" groovy =
+
+          service jenkins restart
+          systemctl enable jenkins
+      Tags:
+        - Key: Name
+          Value: !Sub '${environment}-${product}-${service}'
+      Tags:
+        - Key: Name
+          Value: !Sub '${environment}-${product}-${service}'
