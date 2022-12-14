@@ -1,0 +1,10 @@
+pipeline {
+    agent any
+    stages {
+        stage('Submit Stack') {
+            steps {
+            sh "aws cloudformation create-stack --stack-name demo-jenkins-stack --template-body file://jenkinsOnEc2.yml --region 'us-east-1'"
+              }
+             }
+            }
+ }
