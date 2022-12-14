@@ -104,9 +104,9 @@ Resources:
         - AssociatePublicIpAddress: 'true'
           DeviceIndex: '0'
           GroupSet:
-            - sg-083534e1d754d37c8 
+            - sg-0c32046fd099d9d00 
               
-          SubnetId: subnet-0f9cf22f4a26651ea 
+          SubnetId: subnet-0fd3ebe8e286f50b9 
             
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
