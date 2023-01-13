@@ -3,7 +3,7 @@ Description: VPC CFT
 Parameters:
   environment:
     Type: String
-    Default: demo
+    Default: new
   product:
     Type: String
     Default: test
@@ -12,7 +12,7 @@ Parameters:
     Default: vpc
   vpcCIDR:
     Type: String
-    Default: 25.108.1.0/24
+    Default: 25.100.1.0/24
 
 Resources:
   VPC:
